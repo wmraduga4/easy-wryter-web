@@ -1,0 +1,80 @@
+# ============================================
+# Easy Writer Web Component - Docker Compose
+# ============================================
+# 
+# ВАЖНО: Этот компонент использует общую инфраструктуру
+# из проекта ai-article-backend:
+# - PostgreSQL (контейнер: easy_writer_postgres)
+# - Redis (контейнер: easy_writer_redis)
+# - Docker сеть: easy-writer-network
+#
+# ПЕРЕД ЗАПУСКОМ:
+# 1. Убедитесь, что основной бекенд запущен и создал сеть easy-writer-network
+# 2. Настройте .env файл в корне проекта
+# 3. Запуск: docker-compose up -d
+#
+# ============================================
+
+services:
+  # ============================================
+  # Backend (FastAPI)
+  # ============================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    container_name: easy_wryter_backend
+    ports:
+      - "${EASY_WRYTER_PORT:-8001}:8000"
+    volumes:
+      - ./backend:/app
+      - ./backend/logs:/app/logs
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-easy_writer}:${POSTGRES_PASSWORD}@easy_writer_postgres:5432/${EASY_WRYTER_DB_NAME:-easy_wryter_db}
+      - REDIS_URL=redis://easy_writer_redis:6379/0
+      - CELERY_BROKER_URL=redis://easy_writer_redis:6379/4
+      - CELERY_RESULT_BACKEND=redis://easy_writer_redis:6379/5
+    env_file:
+      - .env
+    networks:
+      - easy-writer-network
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # Celery Worker
+  # ============================================
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    container_name: easy_wryter_celery_worker
+    volumes:
+      - ./backend:/app
+      - ./backend/logs:/app/logs
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-easy_writer}:${POSTGRES_PASSWORD}@easy_writer_postgres:5432/${EASY_WRYTER_DB_NAME:-easy_wryter_db}
+      - REDIS_URL=redis://easy_writer_redis:6379/0
+      - CELERY_BROKER_URL=redis://easy_writer_redis:6379/4
+      - CELERY_RESULT_BACKEND=redis://easy_writer_redis:6379/5
+    env_file:
+      - .env
+    depends_on:
+      - backend
+    networks:
+      - easy-writer-network
+    restart: unless-stopped
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=8
+
+networks:
+  easy-writer-network:
+    external: true
+    name: easy-writer-network
